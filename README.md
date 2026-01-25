@@ -6,6 +6,67 @@ I built this to check whether recommendations from a 2021 regulatory report were
 
 ---
 
+## Example: From Report to Verdict
+
+Here's how a recommendation flows through the system, using real data from the 2021 Cold Weather Report:
+
+### What the Report Said (Page 19)
+
+> "Generator Owners and Operators should perform annual training on winterization plans"
+
+In plain English: **"Power plant operators need to train their staff every year on how to keep equipment running in freezing weather."**
+
+### What the Pipeline Extracted
+
+```json
+{
+  "actor": "Generator Owners/Generator Operators",
+  "action": "Perform annual training on winterization plans",
+  "test_question": "Have Generator Owners/Operators performed annual training on winterization plans?"
+}
+```
+
+The system broke it down into who's responsible, what they should do, and a yes/no question for the browser agent to investigate.
+
+### What the Browser Agent Found
+
+**Status: IMPLEMENTED**
+
+The agent searched the web and found:
+1. NERC Standard EOP-012-3 (effective October 2025) now **legally requires** annual training
+2. There's an official audit checklist requiring plants to show training records, attendance logs, and course materials
+
+*"Yes, this became law. Power plants must now do this training every year and prove it with paperwork during audits."*
+
+### Final Output
+
+```
+Headline: "Annual training on winterization plans mandated by NERC Standard EOP-012-3"
+Verdict: "Implemented - active audit structure confirms compliance"
+Priority Score: 4.4/10 (lower priority because it's already done)
+```
+
+---
+
+### A Recommendation That *Didn't* Fully Happen
+
+**Report said:** "Generator Owners should develop Corrective Action Plans if they experience freeze-related outages"
+
+**Browser agent found:** Status **PARTIALLY_IMPLEMENTED**
+- The rule exists (NERC EOP-012-2 requires these plans)
+- But during Winter Storm Elliott (Dec 2022), **90,500 MW of power failed anyway** — and 75% of those failures happened at temperatures the plants claimed they could handle
+
+**Final output:**
+```
+Verdict: "Rule exists, but 90,500 MW failed during the next storm - inadequate implementation"
+Priority Score: 6.9/10 (higher priority - needs attention)
+Urgency: 9/10
+```
+
+The pipeline catches the difference between **"they said they'd do it"** vs **"it actually worked when tested."**
+
+---
+
 ## The pipeline
 
 ```
