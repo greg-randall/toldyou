@@ -1,8 +1,8 @@
-# Policy Compliance Verifier
+# ToldYou - A recomendation compliance checker
 
-I built to check if recomendations from a 2021 regulatory report were actually followed.
+An OSINT automation tool that operationalizes the "I told you so." It ingests regulatory post-mortems, extracts the "Must Do" directives, and deploys autonomous agents to verify if the entities actually did them.
 
-It pulls recommendations out of a PDF, creating searchable recomendations, which get passed to a browser agent to see if anyone actually fixed things or if they just wrote a memo about it. Then we write up and rank the impact of each recomendation and build a dashboard to view all the recomendations and if they were or were not followed.
+I built this to check whether recommendations from a 2021 regulatory report were actually followed. The pipeline extracts recommendations from a PDF, hands each one to a browser agent that searches for evidence of compliance, then scores and ranks the findings by impact. The output is a filterable dashboard showing what got fixed and what just got a memo.
 
 ---
 
