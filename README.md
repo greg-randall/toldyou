@@ -1,4 +1,4 @@
-# ToldYou - A recomendation compliance checker
+# ToldYou - A recommendation compliance checker
 
 An OSINT automation tool that operationalizes the "I told you so." It ingests regulatory post-mortems, extracts the "Must Do" directives, and deploys autonomous agents to verify if the entities actually did them.
 
@@ -70,7 +70,7 @@ The pipeline catches the difference between **"they said they'd do it"** vs **"i
 ## The pipeline
 
 ```
-PDF → decompose to recomendations → generate context/summary of pdf → verify if followed → enrich with rank and summaries → visualize in HTML
+PDF → decompose to recommendations → generate context/summary of pdf → verify if followed → enrich with rank and summaries → visualize in HTML
 ```
 
 1. **Decompose** (`01_decompose.py`) — Uses a sliding window to extract "shall/must/should" statements from the PDF while ignoring narrative text. A deduplication trick passes previous results back into the prompt so overlapping windows don't produce duplicates.
@@ -243,4 +243,4 @@ The composite priority score (1-10) is calculated from:
 
 ## Cost
 
-The verification step is where the money goes. Each finding spawns a browser agent that runs 10-30+ steps of web searches. On a 300-finding report, expect real costs from Browser Use credits This report cost. The other steps use standard OpenAI API calls and cost a few dollars total.
+The verification step is where the money goes. Each finding spawns a browser agent that runs 10-30+ steps of web searches. On a 300-finding report, expect real costs from Browser Use credits. The other steps use standard OpenAI API calls and cost a few dollars total.
