@@ -1,0 +1,17 @@
+*.7z
+*.txt
+*.md
+*.pdf
+*.json*
+*.progress
+*.html
+*.csv
+
+!*template.html
+!README.md
+
+extra/*
+__*
+
+debug*
+

@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Policy Verification Report</title>
+
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+
+    <style>
+        body { background-color: #f8f9fa; }
+        .status-badge { white-space: nowrap; text-align: center; }
+        .finding-card { transition: transform 0.2s; border: none; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .finding-card:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .evidence-link { text-decoration: none; }
+        .evidence-link:hover { text-decoration: underline; }
+        .actor-badge { font-size: 0.8em; opacity: 0.8; }
+        .conf-high { }
+        .conf-medium { }
+        .conf-low { }
+        .search-box { max-width: 400px; }
+        [v-cloak] { display: none; }
+        .context-header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
+        .acronym-badge { font-size: 0.85em; }
+        .stat-card { border-radius: 8px; }
+        .stat-number { font-size: 1.5rem; font-weight: 600; }
+
+        /* Score styles */
+        .score-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            font-weight: 700;
+            font-size: 1rem;
+            color: #fff;
+            flex-shrink: 0;
+        }
+        .score-badge-sm { width: 32px; height: 32px; font-size: 0.85rem; }
+        .score-high { background-color: #dc3545; }
+        .score-medium { background-color: #fd7e14; }
+        .score-low { background-color: #198754; }
+
+        .score-bar {
+            height: 6px;
+            border-radius: 3px;
+            background-color: #e9ecef;
+            overflow: hidden;
+        }
+        .score-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.3s;
+        }
+        .score-dimension { font-size: 0.8em; }
+        .score-dimension .label { min-width: 130px; display: inline-block; }
+
+        .verdict-text {
+            font-size: 1.1em;
+            color: #495057;
+        }
+        .headline-text {
+            font-weight: 600;
+            font-size: 1.05em;
+        }
+        .headline-banner {
+            border-bottom: 1px solid rgba(0,0,0,0.08);
+            border-radius: var(--bs-card-inner-border-radius) var(--bs-card-inner-border-radius) 0 0;
+        }
+        .headline-bg-implemented { background-color: #d1e7dd; color: #0a3622; }
+        .headline-bg-partial { background-color: #fff3cd; color: #664d03; }
+        .headline-bg-not-implemented { background-color: #f8d7da; color: #58151c; }
+        .headline-bg-unknown { background-color: #e2e3e5; color: #41464b; }
+
+        .classification-badge {
+            font-size: 0.75em;
+            font-weight: 500;
+        }
+
+        /* Min score slider */
+        .score-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 8px;
+            border-radius: 4px;
+            background: #dee2e6;
+            outline: none;
+        }
+        .score-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #0d6efd;
+            cursor: pointer;
+            border: 2px solid #fff;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+        .score-slider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #0d6efd;
+            cursor: pointer;
+            border: 2px solid #fff;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+        .score-slider::-moz-range-track {
+            height: 8px;
+            border-radius: 4px;
+            background: #dee2e6;
+        }
+    </style>
+</head>
+<body>
+
+<div id="app" v-cloak>
+    <!-- Document Context Header -->
+    <div v-if="context" class="context-header text-white py-3 mb-0">
+        <div class="container">
+            <!-- Always visible: Title + toggle -->
+            <div class="d-flex justify-content-between align-items-center">
+                <h1 class="h4 mb-0">{{ context.title || 'Verification Report' }}</h1>
+                <button class="btn btn-sm btn-outline-light" @click="headerCollapsed = !headerCollapsed" data-bs-toggle="collapse" data-bs-target="#context-details">
+                    <i class="bi" :class="headerCollapsed ? 'bi-chevron-down' : 'bi-chevron-up'"></i>
+                </button>
+            </div>
+
+            <!-- Collapsible: metadata, summary, terms, stats -->
+            <div class="collapse show" id="context-details">
+                <!-- Metadata row -->
+                <div class="d-flex flex-wrap gap-3 text-light small mt-3 mb-2">
+                    <span v-if="context.publication_date">{{ context.publication_date }}</span>
+                    <span v-if="context.event_name">{{ context.event_name }}</span>
+                    <span v-if="context.geographic_scope">{{ context.geographic_scope }}</span>
+                    <span v-if="context.event_date_range">Event Period: {{ context.event_date_range }}</span>
+                </div>
+
+                <!-- Summary inline -->
+                <p v-if="context.summary" class="mb-3 text-light fs-5" style="max-width: 800px;">
+                    {{ context.summary }}
+                </p>
+
+                <div class="row">
+                    <div class="col-lg-8">
+                        <!-- Key Terms (two columns) -->
+                        <div v-if="context.acronyms && Object.keys(context.acronyms).length > 0" class="mt-2">
+                            <h6 class="text-light mb-2">Key Terms</h6>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div v-for="[abbr, def] in acronymColumns[0]" :key="abbr" class="small mb-1">
+                                        <strong class="text-white">{{ abbr }}:</strong> <span class="text-light">{{ def }}</span>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div v-for="[abbr, def] in acronymColumns[1]" :key="abbr" class="small mb-1">
+                                        <strong class="text-white">{{ abbr }}:</strong> <span class="text-light">{{ def }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-4 mt-3 mt-lg-0">
+                        <!-- Stats Summary Cards -->
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <div class="stat-card bg-success bg-opacity-25 p-2 text-center">
+                                    <div class="stat-number text-success">{{ stats.implemented }}</div>
+                                    <div class="small">Implemented</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="stat-card bg-warning bg-opacity-25 p-2 text-center">
+                                    <div class="stat-number text-warning">{{ stats.partial }}</div>
+                                    <div class="small">Partial</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="stat-card bg-danger bg-opacity-25 p-2 text-center">
+                                    <div class="stat-number text-danger">{{ stats.notImplemented }}</div>
+                                    <div class="small">Not Impl.</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="stat-card bg-secondary bg-opacity-25 p-2 text-center">
+                                    <div class="stat-number text-secondary">{{ stats.unknown }}</div>
+                                    <div class="small">Unknown</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Navbar (simplified when context exists) -->
+    <nav class="navbar navbar-dark bg-dark sticky-top mb-4" :class="{'py-2': context}">
+        <div class="container-fluid">
+            <span class="navbar-brand mb-0" :class="context ? 'h5' : 'h1'">
+                <i class="bi bi-shield-check me-2"></i>
+                <span v-if="!context">Verification Report</span>
+                <span v-else>Findings</span>
+            </span>
+            <div class="d-flex align-items-center text-light">
+                <span class="me-3 small">{{ filteredItems.length }} / {{ items.length }} Findings</span>
+                <div class="progress" style="width: 100px; height: 10px;">
+                    <div class="progress-bar bg-success" :style="{width: stats.percentImplemented + '%'}"></div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container pb-5">
+
+        <!-- Controls Row 1: Status + Search -->
+        <div class="row mb-3 g-3">
+            <div class="col-lg-8">
+                <div class="btn-group flex-wrap" role="group">
+                    <button @click="filterStatus = 'ALL'" class="btn btn-outline-secondary" :class="{active: filterStatus === 'ALL'}">
+                        All ({{ items.length }})
+                    </button>
+                    <button @click="filterStatus = 'IMPLEMENTED'" class="btn btn-outline-success" :class="{active: filterStatus === 'IMPLEMENTED'}">
+                        Implemented ({{ stats.implemented }})
+                    </button>
+                    <button @click="filterStatus = 'PARTIALLY_IMPLEMENTED'" class="btn btn-outline-warning" :class="{active: filterStatus === 'PARTIALLY_IMPLEMENTED'}">
+                        Partial ({{ stats.partial }})
+                    </button>
+                    <button @click="filterStatus = 'NOT_IMPLEMENTED'" class="btn btn-outline-danger" :class="{active: filterStatus === 'NOT_IMPLEMENTED'}">
+                        Not Impl. ({{ stats.notImplemented }})
+                    </button>
+                    <button @click="filterStatus = 'UNABLE_TO_VERIFY'" class="btn btn-outline-secondary" :class="{active: filterStatus === 'UNABLE_TO_VERIFY'}">
+                        Unknown ({{ stats.unknown }})
+                    </button>
+                </div>
+            </div>
+            <div class="col-lg-4">
+                <div class="input-group">
+                    <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+                    <input v-model="searchQuery" type="text" class="form-control" placeholder="Search...">
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls Row 2: Sort + Filters -->
+        <div class="row mb-4 g-3">
+            <div class="col-lg-2">
+                <select v-model="sortBy" class="form-select">
+                    <option value="score_desc">Priority (High First)</option>
+                    <option value="score_asc">Priority (Low First)</option>
+                    <option value="safety_impact">Safety Impact</option>
+                    <option value="cost_estimate">Cost Estimate</option>
+                    <option value="implementation_gap">Implementation Gap</option>
+                    <option value="scope_impact">Scope Impact</option>
+                    <option value="urgency">Urgency</option>
+                    <option value="change_magnitude">Change Magnitude</option>
+                    <option value="status">By Status</option>
+                    <option value="actor">By Actor</option>
+                    <option value="page">By Page</option>
+                </select>
+            </div>
+            <div class="col-lg-2">
+                <select v-model="filterConfidence" class="form-select">
+                    <option value="ALL">All Confidence</option>
+                    <option value="HIGH">High Confidence</option>
+                    <option value="MEDIUM">Medium Confidence</option>
+                    <option value="LOW">Low Confidence</option>
+                </select>
+            </div>
+            <template v-if="hasEnrichment">
+                <div class="col-lg-2">
+                    <select v-model="filterChangeType" class="form-select">
+                        <option value="ALL">All Change Types</option>
+                        <option v-for="ct in changeTypeOptions" :key="ct" :value="ct">{{ formatLabel(ct) }}</option>
+                    </select>
+                </div>
+                <div class="col-lg-2">
+                    <select v-model="filterSafetyCategory" class="form-select">
+                        <option value="ALL">All Safety Categories</option>
+                        <option v-for="sc in safetyCategoryOptions" :key="sc" :value="sc">{{ formatLabel(sc) }}</option>
+                    </select>
+                </div>
+                <div class="col-lg-2">
+                    <select v-model="filterDeadlineStatus" class="form-select">
+                        <option value="ALL">All Deadlines</option>
+                        <option v-for="ds in deadlineStatusOptions" :key="ds" :value="ds">{{ formatLabel(ds) }}</option>
+                    </select>
+                </div>
+                <div class="col-lg-2">
+                    <div class="d-flex align-items-center gap-2 h-100">
+                        <label class="form-label mb-0 small text-nowrap">Min Score</label>
+                        <input type="range" class="score-slider flex-grow-1" v-model.number="minScore" min="1" max="10" step="1">
+                        <span class="badge bg-primary rounded-pill">{{ minScore }}</span>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Main List -->
+        <div class="row">
+            <div class="col-12" v-for="(item, index) in filteredItems" :key="item.finding_id + '-' + index">
+                <div class="card finding-card mb-3" :class="getConfidenceClass(item)">
+                    <!-- Headline banner -->
+                    <div v-if="item.enrichment?.headline" class="headline-banner px-3 py-2" :class="getHeadlineBgClass(item)">
+                        <div class="d-flex align-items-center gap-2">
+                            <span v-if="getCompositeScore(item) !== null"
+                                  class="score-badge score-badge-sm"
+                                  :class="getScoreColorClass(item)"
+                                  :title="'Priority: ' + getCompositeScore(item) + '/10'">
+                                {{ getCompositeScore(item) }}
+                            </span>
+                            <span class="headline-text">{{ item.enrichment.headline }}</span>
+                            <span class="badge rounded-pill status-badge py-2 ms-auto" :class="getStatusClass(item)">
+                                {{ getStatusLabel(item) }}
+                            </span>
+                        </div>
+                        <div class="small mt-1 ms-4" style="opacity: 0.75;">
+                            <strong>Actor:</strong> {{ item.finding.actor }}
+                        </div>
+                    </div>
+
+                    <div class="card-body">
+                        <p class="mb-0 text-muted small text-uppercase fw-bold">Recommended Action</p>
+                        <p class="card-text" :class="{'fw-medium': !item.enrichment?.headline}">{{ item.finding.action }}</p>
+
+                        <!-- Verdict (from enrichment) -->
+                        <template v-if="item.enrichment?.verdict">
+                            <p class="mb-0 text-muted small text-uppercase fw-bold">Verdict
+                                <span v-if="item.verification?.confidence" class="text-lowercase fw-normal">({{ item.verification.confidence.toLowerCase() }} confidence)</span>
+                            </p>
+                            <p class="verdict-text mb-2">
+                                {{ item.enrichment.verdict }}
+                            </p>
+                        </template>
+
+                        <!-- Classification tags -->
+                        <div v-if="item.enrichment?.classification" class="d-flex flex-wrap gap-1 mb-2">
+                            <span class="badge bg-light text-dark border classification-badge">
+                                <i class="bi bi-globe2 me-1"></i>{{ formatLabel(item.enrichment.classification.scope_level) }}
+                            </span>
+                            <span class="badge bg-light text-dark border classification-badge">
+                                <i class="bi bi-gear me-1"></i>{{ formatLabel(item.enrichment.classification.change_type) }}
+                            </span>
+                            <span class="badge bg-light text-dark border classification-badge">
+                                <i class="bi bi-currency-dollar me-1"></i>{{ item.enrichment.classification.cost_bracket }}
+                            </span>
+                            <span class="badge bg-light text-dark border classification-badge">
+                                <i class="bi bi-shield-exclamation me-1"></i>{{ formatLabel(item.enrichment.classification.safety_category) }}
+                            </span>
+                            <span class="badge bg-light text-dark border classification-badge">
+                                <i class="bi bi-clock me-1"></i>{{ formatLabel(item.enrichment.classification.deadline_status) }}
+                            </span>
+                        </div>
+
+                        <!-- Details toggle -->
+                        <button class="btn btn-sm btn-light mt-3" type="button" :data-bs-target="'#collapse-' + item.finding_id" data-bs-toggle="collapse">
+                            Details <i class="bi bi-chevron-down"></i>
+                        </button>
+
+                        <!-- Collapsible Details -->
+                        <div class="collapse mt-3" :id="'collapse-' + item.finding_id">
+                            <hr>
+
+                            <p class="text-muted small mb-3">
+                                <i class="bi bi-file-earmark-text me-1"></i>
+                                <strong>Source Document Page:</strong> {{ item.finding.citation_page }}
+                            </p>
+
+                            <div v-if="item.verification" class="bg-light p-3 rounded border-start border-4 border-secondary mb-4">
+                                <p class="mb-1 text-muted small text-uppercase fw-bold">Verification Summary</p>
+                                <p class="mb-0">{{ item.verification.summary }}</p>
+                            </div>
+                            <div v-else class="alert alert-warning mb-4">
+                                Pending Verification or Error: {{ item.error || 'No data' }}
+                            </div>
+
+                            <!-- Score Breakdown -->
+                            <div v-if="item.enrichment?.scores" class="mb-4">
+                                <h6 class="text-muted mb-3"><i class="bi bi-bar-chart"></i> Priority Score Breakdown</h6>
+                                <div class="row g-2">
+                                    <div class="col-md-6" v-for="dim in scoreDimensions" :key="dim.key">
+                                        <div class="score-dimension d-flex align-items-center gap-2">
+                                            <span class="label text-muted">{{ dim.label }}</span>
+                                            <div class="score-bar flex-grow-1">
+                                                <div class="score-bar-fill"
+                                                     :style="{
+                                                         width: (item.enrichment.scores[dim.key] * 10) + '%',
+                                                         backgroundColor: getBarColor(item.enrichment.scores[dim.key])
+                                                     }">
+                                                </div>
+                                            </div>
+                                            <span class="fw-bold" style="min-width: 24px; text-align: right;">
+                                                {{ item.enrichment.scores[dim.key] }}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Evidence -->
+                            <h6 class="text-muted mb-3"><i class="bi bi-link-45deg"></i> Evidence Found</h6>
+
+                            <div v-if="item.verification && item.verification.evidence && item.verification.evidence.length">
+                                <ul class="list-group list-group-flush">
+                                    <li v-for="(ev, idx) in item.verification.evidence" :key="idx" class="list-group-item bg-transparent px-0">
+                                        <a :href="ev.url" target="_blank" class="fw-bold evidence-link">{{ ev.title || ev.url }}</a>
+                                        <span v-if="ev.date" class="badge bg-light text-dark border ms-2">{{ ev.date }}</span>
+                                        <p class="mb-0 small text-muted mt-1">{{ ev.summary }}</p>
+                                    </li>
+                                </ul>
+                            </div>
+                            <div v-else class="text-muted fst-italic">
+                                No direct evidence links returned.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Empty State -->
+        <div v-if="filteredItems.length === 0" class="text-center py-5 text-muted">
+            <i class="bi bi-inbox display-4"></i>
+            <p class="mt-3">No findings match your filters.</p>
+        </div>
+
+    </div>
+
+</div>
+
+<!-- DATA INJECTION POINT -->
+<script>
+    window.REPORT_DATA = {{REPORT_DATA_PLACEHOLDER}};
+    window.REPORT_CONTEXT = {{REPORT_CONTEXT_PLACEHOLDER}};
+</script>
+
+<!-- Vue 3 -->
+<script src="https://cdn.jsdelivr.net/npm/vue@3.3.4/dist/vue.global.prod.js"></script>
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    const { createApp, computed, ref, watch } = Vue;
+
+    createApp({
+        setup() {
+            const items = ref(window.REPORT_DATA || []);
+            const context = ref(window.REPORT_CONTEXT || null);
+            const headerCollapsed = ref(false);
+            // Read initial state from URL
+            const params = new URLSearchParams(window.location.search);
+
+            const filterStatus = ref(params.get('status') || 'ALL');
+            const filterConfidence = ref(params.get('confidence') || 'ALL');
+            const searchQuery = ref(params.get('q') || '');
+
+            // Default sort: by score if enrichment data exists, otherwise no sort
+            const hasEnrichment = items.value.some(i => i.enrichment?.scores?.composite != null);
+            const defaultSort = hasEnrichment ? 'score_desc' : 'status';
+            const sortBy = ref(params.get('sort') || defaultSort);
+
+            // Classification filters
+            const filterChangeType = ref(params.get('change') || 'ALL');
+            const filterSafetyCategory = ref(params.get('safety') || 'ALL');
+            const filterDeadlineStatus = ref(params.get('deadline') || 'ALL');
+            const minScore = ref(parseInt(params.get('min')) || 1);
+
+            // Sync filters to URL
+            function updateURL() {
+                const p = new URLSearchParams();
+                if (filterStatus.value !== 'ALL') p.set('status', filterStatus.value);
+                if (filterConfidence.value !== 'ALL') p.set('confidence', filterConfidence.value);
+                if (searchQuery.value) p.set('q', searchQuery.value);
+                if (sortBy.value !== defaultSort) p.set('sort', sortBy.value);
+                if (filterChangeType.value !== 'ALL') p.set('change', filterChangeType.value);
+                if (filterSafetyCategory.value !== 'ALL') p.set('safety', filterSafetyCategory.value);
+                if (filterDeadlineStatus.value !== 'ALL') p.set('deadline', filterDeadlineStatus.value);
+                if (minScore.value > 1) p.set('min', minScore.value);
+                const qs = p.toString();
+                const url = window.location.pathname + (qs ? '?' + qs : '');
+                window.history.replaceState(null, '', url);
+            }
+
+            watch([filterStatus, filterConfidence, searchQuery, sortBy, filterChangeType, filterSafetyCategory, filterDeadlineStatus, minScore], updateURL);
+
+            // Distinct classification values for filter dropdowns
+            const changeTypeOptions = computed(() => {
+                const vals = new Set();
+                items.value.forEach(i => {
+                    const v = i.enrichment?.classification?.change_type;
+                    if (v) vals.add(v);
+                });
+                return [...vals].sort();
+            });
+
+            const safetyCategoryOptions = computed(() => {
+                const vals = new Set();
+                items.value.forEach(i => {
+                    const v = i.enrichment?.classification?.safety_category;
+                    if (v) vals.add(v);
+                });
+                return [...vals].sort();
+            });
+
+            const deadlineStatusOptions = computed(() => {
+                const vals = new Set();
+                items.value.forEach(i => {
+                    const v = i.enrichment?.classification?.deadline_status;
+                    if (v) vals.add(v);
+                });
+                return [...vals].sort();
+            });
+
+            // Split acronyms into two columns, alphabetized
+            const acronymColumns = computed(() => {
+                if (!context.value?.acronyms) return [[], []];
+                const entries = Object.entries(context.value.acronyms).sort((a, b) => a[0].localeCompare(b[0]));
+                const mid = Math.ceil(entries.length / 2);
+                return [entries.slice(0, mid), entries.slice(mid)];
+            });
+
+            // Score dimension labels for the breakdown view
+            const scoreDimensions = [
+                { key: 'implementation_gap', label: 'Implementation Gap' },
+                { key: 'safety_impact', label: 'Safety Impact' },
+                { key: 'cost_estimate', label: 'Cost Estimate' },
+                { key: 'scope_impact', label: 'Scope Impact' },
+                { key: 'change_magnitude', label: 'Change Magnitude' },
+                { key: 'urgency', label: 'Urgency' },
+            ];
+
+            // Helper to safely get status
+            const getStatus = (item) => item.verification?.status || 'PENDING';
+
+            // Helper to safely get confidence
+            const getConfidence = (item) => item.verification?.confidence || 'LOW';
+
+            // Get composite score or null
+            const getCompositeScore = (item) => {
+                const score = item.enrichment?.scores?.composite;
+                return score != null ? score : null;
+            };
+
+            // Score color class
+            const getScoreColorClass = (item) => {
+                const score = getCompositeScore(item);
+                if (score === null) return '';
+                if (score >= 7) return 'score-high';
+                if (score >= 4) return 'score-medium';
+                return 'score-low';
+            };
+
+            // Bar color for score breakdown
+            const getBarColor = (value) => {
+                if (value >= 7) return '#dc3545';
+                if (value >= 4) return '#fd7e14';
+                return '#198754';
+            };
+
+            // Format classification labels
+            const formatLabel = (str) => {
+                if (!str) return '';
+                return str.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            };
+
+            // Status sort order
+            const statusOrder = {
+                'NOT_IMPLEMENTED': 0,
+                'UNABLE_TO_VERIFY': 1,
+                'PARTIALLY_IMPLEMENTED': 2,
+                'IMPLEMENTED': 3,
+                'PENDING': 4,
+            };
+
+            // Compute stats from all items
+            const stats = computed(() => {
+                const total = items.value.length;
+                if (total === 0) {
+                    return {
+                        total: 0,
+                        implemented: 0,
+                        partial: 0,
+                        notImplemented: 0,
+                        unknown: 0,
+                        percentImplemented: 0
+                    };
+                }
+
+                const implemented = items.value.filter(i => getStatus(i) === 'IMPLEMENTED').length;
+                const partial = items.value.filter(i => getStatus(i) === 'PARTIALLY_IMPLEMENTED').length;
+                const notImplemented = items.value.filter(i => getStatus(i) === 'NOT_IMPLEMENTED').length;
+                const unknown = items.value.filter(i => getStatus(i) === 'UNABLE_TO_VERIFY' || getStatus(i) === 'PENDING').length;
+
+                return {
+                    total,
+                    implemented,
+                    partial,
+                    notImplemented,
+                    unknown,
+                    percentImplemented: Math.round((implemented / total) * 100)
+                };
+            });
+
+            const filteredItems = computed(() => {
+                let result = items.value.filter(item => {
+                    const status = getStatus(item);
+                    const confidence = getConfidence(item);
+
+                    // Status Filter
+                    if (filterStatus.value !== 'ALL' && status !== filterStatus.value) {
+                        return false;
+                    }
+
+                    // Confidence Filter
+                    if (filterConfidence.value !== 'ALL' && confidence !== filterConfidence.value) {
+                        return false;
+                    }
+
+                    // Search Filter
+                    if (searchQuery.value) {
+                        const q = searchQuery.value.toLowerCase();
+                        const searchParts = [
+                            item.finding?.actor,
+                            item.finding?.action,
+                            item.verification?.summary,
+                            item.enrichment?.headline,
+                            item.enrichment?.verdict,
+                        ].filter(Boolean);
+                        const text = searchParts.join(' ').toLowerCase();
+                        if (!text.includes(q)) {
+                            return false;
+                        }
+                    }
+
+                    // Change Type Filter
+                    if (filterChangeType.value !== 'ALL') {
+                        if (item.enrichment?.classification?.change_type !== filterChangeType.value) return false;
+                    }
+
+                    // Safety Category Filter
+                    if (filterSafetyCategory.value !== 'ALL') {
+                        if (item.enrichment?.classification?.safety_category !== filterSafetyCategory.value) return false;
+                    }
+
+                    // Deadline Status Filter
+                    if (filterDeadlineStatus.value !== 'ALL') {
+                        if (item.enrichment?.classification?.deadline_status !== filterDeadlineStatus.value) return false;
+                    }
+
+                    // Min Score Filter
+                    if (minScore.value > 1) {
+                        const score = getCompositeScore(item);
+                        if (score === null || score < minScore.value) return false;
+                    }
+
+                    return true;
+                });
+
+                // Sort
+                result = [...result].sort((a, b) => {
+                    switch (sortBy.value) {
+                        case 'score_desc': {
+                            const sa = getCompositeScore(a) ?? -1;
+                            const sb = getCompositeScore(b) ?? -1;
+                            return sb - sa;
+                        }
+                        case 'score_asc': {
+                            const sa = getCompositeScore(a) ?? 11;
+                            const sb = getCompositeScore(b) ?? 11;
+                            return sa - sb;
+                        }
+                        case 'safety_impact':
+                        case 'cost_estimate':
+                        case 'implementation_gap':
+                        case 'scope_impact':
+                        case 'change_magnitude':
+                        case 'urgency': {
+                            const dimKey = sortBy.value;
+                            const sa = a.enrichment?.scores?.[dimKey] ?? -1;
+                            const sb = b.enrichment?.scores?.[dimKey] ?? -1;
+                            return sb - sa;
+                        }
+                        case 'status': {
+                            const oa = statusOrder[getStatus(a)] ?? 5;
+                            const ob = statusOrder[getStatus(b)] ?? 5;
+                            return oa - ob;
+                        }
+                        case 'actor': {
+                            const aa = (a.finding?.actor || '').toLowerCase();
+                            const ab = (b.finding?.actor || '').toLowerCase();
+                            return aa.localeCompare(ab);
+                        }
+                        case 'page': {
+                            const pa = parseInt(a.finding?.citation_page) || 999;
+                            const pb = parseInt(b.finding?.citation_page) || 999;
+                            return pa - pb;
+                        }
+                        default:
+                            return 0;
+                    }
+                });
+
+                return result;
+            });
+
+            const getStatusClass = (item) => {
+                const s = getStatus(item);
+                if (s === 'IMPLEMENTED') return 'bg-success';
+                if (s === 'PARTIALLY_IMPLEMENTED') return 'bg-warning text-dark';
+                if (s === 'NOT_IMPLEMENTED') return 'bg-danger';
+                if (s === 'UNABLE_TO_VERIFY') return 'bg-secondary';
+                return 'bg-light text-dark border';
+            };
+
+            const getStatusLabel = (item) => {
+                const s = getStatus(item);
+                return s.replace(/_/g, ' ');
+            };
+
+            const getConfidenceClass = (item) => {
+                const c = getConfidence(item);
+                if (c === 'HIGH') return 'conf-high';
+                if (c === 'MEDIUM') return 'conf-medium';
+                return 'conf-low';
+            };
+
+            const getConfidenceBadgeClass = (item) => {
+                const c = getConfidence(item);
+                if (c === 'HIGH') return 'bg-success';
+                if (c === 'MEDIUM') return 'bg-warning text-dark';
+                return 'bg-danger';
+            };
+
+            const getHeadlineBgClass = (item) => {
+                const s = getStatus(item);
+                if (s === 'IMPLEMENTED') return 'headline-bg-implemented';
+                if (s === 'PARTIALLY_IMPLEMENTED') return 'headline-bg-partial';
+                if (s === 'NOT_IMPLEMENTED') return 'headline-bg-not-implemented';
+                return 'headline-bg-unknown';
+            };
+
+            return {
+                items,
+                context,
+                headerCollapsed,
+                acronymColumns,
+                filterStatus,
+                filterConfidence,
+                filterChangeType,
+                filterSafetyCategory,
+                filterDeadlineStatus,
+                minScore,
+                searchQuery,
+                sortBy,
+                hasEnrichment,
+                filteredItems,
+                stats,
+                scoreDimensions,
+                changeTypeOptions,
+                safetyCategoryOptions,
+                deadlineStatusOptions,
+                getStatusClass,
+                getStatusLabel,
+                getConfidenceClass,
+                getConfidenceBadgeClass,
+                getHeadlineBgClass,
+                getCompositeScore,
+                getScoreColorClass,
+                getBarColor,
+                formatLabel,
+            };
+        }
+    }).mount('#app');
+</script>
+
+</body>
+</html>
