@@ -67,25 +67,41 @@ The pipeline catches the difference between **"they said they'd do it"** vs **"i
 
 ---
 
-## The pipeline
+## The Pipeline
 
 ```
-PDF → decompose to recommendations → generate context/summary of pdf → verify if followed → enrich with rank and summaries → visualize in HTML
+PDF → Project Folder → Decompose → Summarize → Verify → Enrich → Visualize Findings → Find Consequences → Visualize Consequences
 ```
 
-1. **Decompose** (`01_decompose.py`) — Uses a sliding window to extract "shall/must/should" statements from the PDF while ignoring narrative text. A deduplication trick passes previous results back into the prompt so overlapping windows don't produce duplicates.
+1. **Decompose** (`01_decompose.py`) — Creates the project folder and extracts actionable recommendations.
+2. **Summarize** (`02_summary.py`) — Scans for metadata, authors, and acronyms (e.g., "GO" = "Generator Owner").
+3. **Verify** (`03_verify.py`) — Deploys browser agents to find Level 1 (Regulatory) and Level 2 (Physical) evidence.
+4. **Enrich** (`04_enrich.py`) — Scores findings on 6 risk dimensions and generates headlines.
+5. **Visualize** (`05_visualize.py`) — Generates the main compliance dashboard.
+6. **Consequences** (`06_consequences.py`) — Matches unfollowed findings to recent news events using parallel web discovery and video transcription.
+7. **Visualize Consequences** (`07_visualize.py`) — Generates an interactive report linking news to regulatory failures.
 
-2. **Summarize** (`02_summary.py`) — Scans the first 25 pages for dates, authors, and acronym definitions. The verification agent needs this so it knows "GO" means "Generator Owner" and not a verb.
+---
 
-3. **Verify** (`03_verify.py`) — The expensive part. Browser agents search the web for each finding and classify it as `IMPLEMENTED`, `PARTIALLY_IMPLEMENTED`, `NOT_IMPLEMENTED`, or `UNABLE_TO_VERIFY`. The agent looks for two levels of evidence: paper compliance (a rule was written) and actual compliance (someone bought equipment or ran an audit).
+## Project Architecture (Refactored)
 
-4. **Enrich** (`04_enrich.py`) — Scores each finding on six dimensions and computes a weighted priority score (1-10). Also generates a headline and verdict that cite specific evidence from the verification step.
+We recently refactored the pipeline to use a **holistic project-based workflow** managed by `pipeline_utils.py`. 
 
-5. **Visualize** (`05_visualize.py`) — Produces a standalone HTML file. No server needed.
+Previously, scripts required manual file chaining. Now, everything is organized into a single project directory. You only need to pass the path to that directory (or the original PDF) to any script, and it will automatically resolve the necessary inputs and outputs.
 
-6. **Consequences** (`06_consequences.py`) — Monitors news for real-world impact. It searches for recent news articles related to specific events (e.g., "Texas winter storm 2024") and matches them against unfollowed recommendations to see if the failure to act caused specific problems.
-
-7. **Visualize Consequences** (`07_visualize.py`) — Generates a specialized HTML report linking news articles to specific failed recommendations.
+### Standardized Project Structure:
+```
+report-slug/
+├── 01_findings.json
+├── 02_context.json
+├── 03_verified.jsonl
+├── 04_enriched.jsonl
+├── 05_report.html
+├── 06_consequences.jsonl
+├── 07_consequences_report.html
+├── articles/          # Cached news content
+└── debug/             # LLM prompts and raw responses
+```
 
 ---
 
@@ -115,77 +131,73 @@ $env:BROWSER_USE_API_KEY="bu_..."
 
 ## Usage
 
+The pipeline is project-based. You can pass either the original PDF or the resulting project directory to any script.
+
 ### 1. Extract findings
 
 ```bash
 python 01_decompose.py "report.pdf"
 ```
 
-Outputs a JSON file with actor/action pairs.
+Creates a folder named `report/` and outputs `01_findings.json`.
 
 - `--test 10` — Only process the first 10 pages
-- `--debug` — Save raw extracted text to a folder
+- `--debug` — Save raw extracted text
 
 ### 2. Get context
 
 ```bash
-python 02_summary.py "report.pdf"
+python 02_summary.py "report/"
 ```
 
-Outputs a `_context.json` file. Don't skip this — the agent needs to know the report date so it doesn't cite evidence from before the report was written.
-
-- `--pages 30` — How far into the doc to look for definitions (default 25)
+Outputs `02_context.json`.
 
 ### 3. Verify
 
 ```bash
-python 03_verify.py "report.json" --context "report_context.json" --resume
+python 03_verify.py "report/" --resume
 ```
 
-Outputs a `.verified.jsonl` file.
+Outputs `03_verified.jsonl`.
 
-- `--resume` — Continue from where you left off. Browser agents are flaky; this flag is essential for long runs.
-- `--workers 3` — Run up to 3 parallel agents (rate limit cap)
-- `--no-cost-tracking` — Disable the per-task billing delay. Required if you want parallel workers to actually run in parallel.
-- `--try-hard` — Increase max steps from 60 to 90 and enable vision
+- `--resume` — Continue from where you left off.
+- `--workers 3` — Parallel agents.
+- `--try-hard` — Increase max steps and enable vision.
 
 ### 4. Enrich
 
 ```bash
-python 04_enrich.py "report.verified.jsonl"
+python 04_enrich.py "report/"
 ```
 
-Outputs a `.enriched.jsonl` file with priority scores and headlines.
-
-- `--resume` — Skip already-scored findings
+Outputs `04_enriched.jsonl` with priority scores and headlines.
 
 ### 5. Visualize
 
 ```bash
-python 05_visualize.py "report.enriched.jsonl" --context "report_context.json"
+python 05_visualize.py "report/"
 ```
 
-Outputs an HTML report.
+Outputs `05_report.html`.
 
 ### 6. Find Consequences
 
 ```bash
-python 06_consequences.py --findings "report.enriched.jsonl" --context "report_context.json" --event "texas winter storm january 2025"
+python 06_consequences.py "report/" --event "texas winter storm january 2025"
 ```
 
-Outputs a `.consequences.jsonl` file containing matches between unfollowed recommendations and real-world news.
+Outputs `06_consequences.jsonl` matching findings to real-world news.
 
-- `--days 14` — Look back 14 days for news (strict filtering).
-- `--headless` — Run browser in background.
-- `--resume` — Skip already-processed URLs.
+- `--days 14` — Look back window.
+- `--debug` — Save raw matching prompts/responses.
 
 ### 7. Visualize Consequences
 
 ```bash
-python 07_visualize.py "report.consequences.jsonl"
+python 07_visualize.py "report/"
 ```
 
-Outputs an interactive HTML report (`.consequences.html`) linking news stories to specific regulatory failures. Uses `07_template.html`.
+Outputs `07_consequences_report.html`. Uses `07_template.html`.
 
 ---
 
