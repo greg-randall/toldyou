@@ -17,3 +17,5 @@ debug*
 
 03_verify_openai.py
 test/
+
+toldyou/
