@@ -163,6 +163,7 @@ Outputs `03_verified.jsonl`.
 - `--resume` — Continue from where you left off.
 - `--workers 3` — Parallel agents.
 - `--try-hard` — Increase max steps and enable vision.
+- `--cost-tracking` — Enable per-task billing analysis (forces `workers=1`).
 
 ### 4. Enrich
 

@@ -6,9 +6,9 @@ Takes output from decompose.py (findings) and summary.py (context) and checks
 whether each recommendation was actually implemented.
 
 Usage:
-    python verify.py findings.json --context context.json
-    python verify.py findings.json --context context.json --resume
-    python verify.py findings.json --context context.json --debug --workers 1
+    python verify.py report/
+    python verify.py report/ --resume
+    python verify.py report/ --cost-tracking --workers 1
 """
 
 import asyncio
@@ -417,7 +417,7 @@ def main():
     parser.add_argument("--try-hard", action="store_true", help="Use more steps and longer timeout")
     parser.add_argument("--debug", action="store_true", help="Process only first 3 findings")
     parser.add_argument("--limit", type=int, help="Limit to first N findings")
-    parser.add_argument("--no-cost-tracking", action="store_true", help="Disable per-task cost tracking")
+    parser.add_argument("--cost-tracking", action="store_true", help="Enable per-task cost tracking (forces workers=1)")
     parser.add_argument("--cost-settle-delay", type=int, default=5, help="Seconds to wait for billing to settle")
     args = parser.parse_args()
 
@@ -458,7 +458,7 @@ def main():
 
     progress_path = output_path.with_suffix(".progress")
     cost_log_path = None
-    if not args.no_cost_tracking:
+    if args.cost_tracking:
         cost_log_path = output_path.with_name(output_path.stem + ".costs.csv")
 
     completed_ids = set()
