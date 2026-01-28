@@ -172,6 +172,7 @@ class NodriverBrowser:
 # ============================================================================
 
 
+def sanitize_filename(text: str) -> str:
     """
     Sanitize text for use in filenames by replacing problematic characters.
 
