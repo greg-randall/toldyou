@@ -36,6 +36,8 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import trafilatura
+import webvtt
+import yt_dlp
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
@@ -134,6 +136,143 @@ def append_jsonl(record: dict, path: Path):
 def load_completed_urls(progress_path: Path) -> set:
     """Load set of already-processed URLs."""
     if not progress_path.exists():
+        return set()
+    urls = set()
+    with open(progress_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                urls.add(line)
+    return urls
+
+
+def mark_url_complete(url: str, progress_path: Path):
+    """Mark URL as processed."""
+    with open(progress_path, "a") as f:
+        f.write(url + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def slugify(text: str, max_len: int = 50) -> str:
+    """Convert text to filesystem-safe slug."""
+    text = text.lower()
+    text = re.sub(r'[^\w\s-]', '', text)
+    text = re.sub(r'[\s_-]+', '-', text)
+    text = text.strip('-')
+    return text[:max_len]
+
+
+def url_to_filename(url: str) -> str:
+    """Convert URL to unique filename."""
+    parsed = urlparse(url)
+    domain = parsed.netloc.replace("www.", "")
+    path_slug = slugify(parsed.path, 30)
+    url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+    return f"{domain}_{path_slug}_{url_hash}"
+
+
+# --- Video Utilities ---
+
+def is_video_url(url: str) -> bool:
+    """Check if URL is a supported video platform."""
+    domain = urlparse(url).netloc.lower()
+    return any(v in domain for v in ["youtube.com", "youtu.be", "vimeo.com"])
+
+def fetch_video_transcript(url: str) -> dict:
+    """Fetch video metadata and transcript using yt-dlp."""
+    # Create a temp identifier for this download to avoid collisions
+    temp_id = hashlib.md5(url.encode()).hexdigest()[:8]
+    temp_base = Path(f"temp_vid_{temp_id}")
+    
+    ydl_opts = {
+        'skip_download': True,      # Do not download the video file
+        'writesubtitles': True,     # Write manual subtitles
+        'writeautomaticsub': True,  # Write auto-generated subtitles
+        'subtitleslangs': ['en'],   # English only
+        'subtitlesformat': 'vtt',   # VTT format is easier to parse
+        'quiet': True,
+        'no_warnings': True,
+        'outtmpl': str(temp_base),  # Output filename template
+    }
+    
+    transcript_text = ""
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # download=True triggers subtitle download even if skip_download=True
+            info = ydl.extract_info(url, download=True)
+            
+            # Extract basic metadata
+            title = info.get('title', 'Unknown Video')
+            upload_date = info.get('upload_date', '') # YYYYMMDD
+            if upload_date and len(upload_date) == 8:
+                upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
+            
+            # Find the downloaded subtitle file (e.g. temp_vid_xyz.en.vtt)
+            # yt-dlp might append lang code
+            potential_files = list(Path('.').glob(f"temp_vid_{temp_id}*.vtt"))
+            
+            if potential_files:
+                # Take the first one (manual or auto)
+                sub_file = potential_files[0]
+                try:
+                    # Use webvtt-py to parse the file
+                    # It handles deduplication of cues and rolling captions much better
+                    vtt = webvtt.read(str(sub_file))
+                    
+                    # Extract text from cues
+                    lines = []
+                    seen_lines = set()
+                    
+                    for cue in vtt:
+                        # Clean up text
+                        text = cue.text.strip()
+                        # Remove tags if any remain (webvtt usually handles this, but just in case)
+                        text = re.sub(r'<[^>]+>', '', text)
+                        
+                        if text and text not in seen_lines:
+                            lines.append(text)
+                            seen_lines.add(text)
+                            
+                    transcript_text = " ".join(lines)
+                finally:
+                    # Cleanup
+                    sub_file.unlink()
+            
+            # Cleanup any other potential artifacts
+            for f in Path('.').glob(f"temp_vid_{temp_id}*"):
+                try: f.unlink()
+                except: pass
+
+            # Construct final text
+            text_parts = [f"Title: {title}", f"Description: {info.get('description', '')}"]
+            
+            if info.get('tags'):
+                text_parts.append(f"Tags: {', '.join(info['tags'])}")
+            
+            if transcript_text:
+                text_parts.append(f"\n--- Transcript ---\n{transcript_text}") # No more cap
+            else:
+                text_parts.append("\n--- Transcript ---\n(No subtitles available)")
+                
+            return {
+                "title": title,
+                "date": upload_date,
+                "text": "\n\n".join(text_parts),
+                "source": "YouTube/Video",
+                "error": None
+            }
+            
+    except Exception as e:
+        # Cleanup on error
+        for f in Path('.').glob(f"temp_vid_{temp_id}*"):
+            try: f.unlink()
+            except: pass
+        return {"error": str(e)}
+
+
+# --- Phase A: Discovery ---
         return set()
     urls = set()
     with open(progress_path, "r") as f:
@@ -406,109 +545,162 @@ async def fetch_articles(
     raw_dir.mkdir(parents=True, exist_ok=True)
     text_dir.mkdir(parents=True, exist_ok=True)
 
-    # Configure
+    fetched = []
+
+    # Separate video and web candidates
+    video_candidates = []
+    web_candidates = []
+    
+    for c in to_fetch:
+        if is_video_url(c["url"]):
+            video_candidates.append(c)
+        else:
+            web_candidates.append(c)
+            
+    # 1. Process Video Candidates
+    for i, candidate in enumerate(video_candidates, 1):
+        url = candidate["url"]
+        print(f"  [Video {i}/{len(video_candidates)}] Processing: {url[:70]}...")
+        
+        vid_data = fetch_video_transcript(url)
+        
+        if vid_data.get("error"):
+            print(f"           Video error: {vid_data['error']}")
+            # Fallback to snippet
+            article = {
+                "url": url,
+                "title": candidate.get("title", ""),
+                "source": "Video",
+                "date": "",
+                "text": candidate.get("snippet", ""),
+                "text_path": "",
+                "snippet": candidate.get("snippet", ""),
+                "source_type": "snippet",
+            }
+        else:
+            # Save transcript text
+            filename = url_to_filename(url)
+            text_path = text_dir / f"{filename}.txt"
+            text_path.write_text(vid_data["text"], encoding="utf-8")
+            
+            article = {
+                "url": url,
+                "title": vid_data["title"],
+                "source": vid_data["source"],
+                "date": vid_data["date"],
+                "text": vid_data["text"],
+                "text_path": str(text_path),
+                "snippet": candidate.get("snippet", ""),
+            }
+            print(f"           Extracted metadata & description")
+            
+        fetched.append(article)
+
+    # Configure browser
     config = FetchConfig(
         headless=headless,
         wait_time=PAGE_WAIT,
         selector_timeout=PAGE_TIMEOUT
     )
 
-    print(f"  Starting browser (headless={headless})...")
-
-    fetched = []
-    
-    async with NodriverBrowser(config) as browser:
-        for i, candidate in enumerate(to_fetch, 1):
+    # 2. Process Web Candidates with Browser
+    if web_candidates:
+        print(f"  Starting parallel browser fetch for {len(web_candidates)} web pages (headless={headless})...")
+        
+        # Concurrency control
+        sem = asyncio.Semaphore(4)  # Max 4 concurrent tabs
+        domain_next_allowed = {}    # domain -> timestamp when next request is allowed
+        
+        async def fetch_single_web(candidate, index, total):
             url = candidate["url"]
+            domain = urlparse(url).netloc
             filename = url_to_filename(url)
-
-            print(f"  [{i}/{len(to_fetch)}] Fetching: {url[:70]}...")
-
-            html = None
-            error_msg = None
-            page = None
-
-            try:
-                # Open in new tab
-                page = await browser.get(url, new_tab=True)
-                
-                # Wait
-                await page.sleep(PAGE_WAIT)
-                
-                # Get content
-                html = await page.get_content()
-                
-            except Exception as e:
-                error_msg = str(e)
-            finally:
-                if page:
-                    try:
-                        await page.close()
-                    except Exception:
-                        pass
-
-            if html:
-                # Save raw HTML
-                raw_path = raw_dir / f"{filename}.html"
-                raw_path.write_text(html, encoding="utf-8")
-
-                # Extract text with trafilatura
-                text = trafilatura.extract(
-                    html,
-                    include_comments=False,
-                    include_tables=True,
-                )
-                metadata = trafilatura.extract_metadata(html)
-
-                if text:
-                    # Save extracted text
-                    text_path = text_dir / f"{filename}.txt"
-                    text_path.write_text(text, encoding="utf-8")
-
-                    article = {
-                        "url": url,
-                        "title": (metadata.title if metadata else None) or candidate.get("title", ""),
-                        "source": (metadata.sitename if metadata else None) or urlparse(url).netloc,
-                        "date": (metadata.date if metadata else None) or "",
-                        "text": text,
-                        "text_path": str(text_path),
-                        "snippet": candidate.get("snippet", ""),
-                    }
-                    fetched.append(article)
-                    print(f"           Extracted {len(text)} chars")
-                else:
-                    # Fallback to snippet
-                    print(f"           Extraction failed, using snippet")
-                    article = {
-                        "url": url,
-                        "title": candidate.get("title", ""),
-                        "source": urlparse(url).netloc,
-                        "date": "",
-                        "text": candidate.get("snippet", ""),
-                        "text_path": "",
-                        "snippet": candidate.get("snippet", ""),
-                        "source_type": "snippet",
-                    }
-                    fetched.append(article)
+            
+            # Per-domain rate limiting logic
+            now = time.time()
+            allowed = domain_next_allowed.get(domain, 0)
+            if now < allowed:
+                wait = allowed - now
+                domain_next_allowed[domain] = allowed + FETCH_DELAY
             else:
-                # Use snippet as fallback
-                print(f"           Fetch failed: {error_msg or 'unknown'}")
-                if candidate.get("snippet"):
-                    article = {
-                        "url": url,
-                        "title": candidate.get("title", ""),
-                        "source": urlparse(url).netloc,
-                        "date": "",
-                        "text": candidate.get("snippet", ""),
-                        "text_path": "",
-                        "snippet": candidate.get("snippet", ""),
-                        "source_type": "snippet",
-                    }
-                    fetched.append(article)
+                wait = 0
+                domain_next_allowed[domain] = now + FETCH_DELAY
+            
+            if wait > 0:
+                await asyncio.sleep(wait)
 
-            # Polite delay
-            if i < len(to_fetch):
-                await asyncio.sleep(FETCH_DELAY)
+            async with sem:
+                print(f"  [Web {index}/{total}] Fetching: {url[:60]}...")
+                
+                html = None
+                page = None
+                
+                try:
+                    page = await browser.get(url, new_tab=True)
+                    await page.sleep(PAGE_WAIT)
+                    html = await page.get_content()
+                except Exception as e:
+                    print(f"           Error fetching {url[:30]}...: {e}")
+                finally:
+                    if page:
+                        try:
+                            await page.close()
+                        except Exception:
+                            pass
+
+                if html:
+                    # Save raw HTML
+                    raw_path = raw_dir / f"{filename}.html"
+                    raw_path.write_text(html, encoding="utf-8")
+
+                    # Extract text (run in thread to avoid blocking loop)
+                    text = await asyncio.to_thread(
+                        trafilatura.extract, 
+                        html, 
+                        include_comments=False, 
+                        include_tables=True
+                    )
+                    
+                    metadata = await asyncio.to_thread(trafilatura.extract_metadata, html)
+
+                    if text:
+                        # Save extracted text
+                        text_path = text_dir / f"{filename}.txt"
+                        text_path.write_text(text, encoding="utf-8")
+
+                        return {
+                            "url": url,
+                            "title": (metadata.title if metadata else None) or candidate.get("title", ""),
+                            "source": (metadata.sitename if metadata else None) or domain,
+                            "date": (metadata.date if metadata else None) or "",
+                            "text": text,
+                            "text_path": str(text_path),
+                            "snippet": candidate.get("snippet", ""),
+                        }
+                    else:
+                        print(f"           Extraction failed for {url[:30]}... using snippet")
+                else:
+                    print(f"           Fetch failed for {url[:30]}... using snippet")
+
+                # Fallback
+                return {
+                    "url": url,
+                    "title": candidate.get("title", ""),
+                    "source": domain,
+                    "date": "",
+                    "text": candidate.get("snippet", ""),
+                    "text_path": "",
+                    "snippet": candidate.get("snippet", ""),
+                    "source_type": "snippet",
+                }
+
+        async with NodriverBrowser(config) as browser:
+            tasks = [
+                fetch_single_web(c, i, len(web_candidates)) 
+                for i, c in enumerate(web_candidates, 1)
+            ]
+            results = await asyncio.gather(*tasks)
+            fetched.extend(results)
 
     # Combine with cached articles
     all_articles = fetched + _load_cached_articles(
@@ -547,10 +739,27 @@ def _load_cached_articles(candidates: list[dict], articles_dir: Path) -> list[di
 
 # --- Phase C: Match ---
 
+def is_date_in_range(date_str: str, cutoff_date: datetime) -> bool:
+    """Check if article date is within the allowed range."""
+    if not date_str:
+        return True  # If unknown, let the LLM decide based on text
+    try:
+        # trafilatura usually returns YYYY-MM-DD or ISO strings
+        # Extract just the date part
+        match = re.search(r'(\d{4}-\d{2}-\d{2})', date_str)
+        if match:
+            d = datetime.strptime(match.group(1), "%Y-%m-%d")
+            return d >= cutoff_date
+    except Exception:
+        pass
+    return True
+
+
 def build_match_prompt(
     article: dict,
     unfollowed_findings: list[dict],
     event_description: str,
+    cutoff_date: str,
 ) -> str:
     """Build prompt for matching article to findings."""
     # Build findings reference
@@ -575,6 +784,9 @@ def build_match_prompt(
 
     return f"""You are analyzing a news article to find evidence that unfollowed regulatory recommendations caused real-world problems.
 
+CRITICAL: We are ONLY interested in consequences from the RECENT event occurring between {cutoff_date} and today. 
+If this article is from a previous year or an older event, it is NOT relevant for this analysis.
+
 EVENT BEING INVESTIGATED: {event_description}
 
 ARTICLE:
@@ -594,9 +806,9 @@ UNFOLLOWED RECOMMENDATIONS (these were NOT fully implemented):
 ---
 
 TASK:
-1. Read the article carefully
-2. Identify any connections between problems described in the article and the unfollowed recommendations
-3. For each relevant finding, assess how directly the article demonstrates consequences of not following that recommendation
+1. Verify the article date. If it is BEFORE {cutoff_date}, return an empty matches array immediately.
+2. Read the article carefully to find connections to the event problems.
+3. For each relevant finding, assess how directly the article demonstrates consequences of not following that recommendation.
 
 SCORING GUIDE:
 - 1-3: Article mentions topic area but doesn't clearly show consequence of the specific unfollowed recommendation
@@ -605,8 +817,7 @@ SCORING GUIDE:
 
 IMPORTANT:
 - Only include matches where the article provides meaningful evidence
-- The excerpt should be a specific quote or data point from the article
-- If the article is not relevant to any findings, return an empty matches array
+- If the article is not relevant to any findings OR is from the wrong time period, return an empty matches array.
 
 Call the match_findings function with your analysis."""
 
@@ -616,6 +827,7 @@ def match_article_to_findings(
     article: dict,
     unfollowed_findings: list[dict],
     event_description: str,
+    cutoff_date: str,
     min_relevance: int = 5,
 ) -> list[dict]:
     """
@@ -624,7 +836,7 @@ def match_article_to_findings(
     Returns:
         List of matches above min_relevance threshold
     """
-    prompt = build_match_prompt(article, unfollowed_findings, event_description)
+    prompt = build_match_prompt(article, unfollowed_findings, event_description, cutoff_date)
 
     try:
         response = client.chat.completions.create(
@@ -653,6 +865,7 @@ def match_all_articles(
     articles: list[dict],
     unfollowed_findings: list[dict],
     event_description: str,
+    cutoff_date_dt: datetime,
     min_relevance: int = 5,
     output_path: Path = None,
     progress_path: Path = None,
@@ -667,6 +880,9 @@ def match_all_articles(
     print("PHASE C: MATCH")
     print("=" * 60)
 
+    cutoff_str = cutoff_date_dt.strftime("%Y-%m-%d")
+    print(f"  Strict date filter: >= {cutoff_str}")
+
     # Build finding lookup
     finding_lookup = {f.get("finding_id", ""): f for f in unfollowed_findings}
 
@@ -675,10 +891,19 @@ def match_all_articles(
     for i, article in enumerate(articles, 1):
         url = article.get("url", "")
         title = article.get("title", "Unknown")[:50]
-        print(f"  [{i}/{len(articles)}] Matching: {title}...")
+        date_str = article.get("date", "")
+        
+        # Hard code-level filter
+        if not is_date_in_range(date_str, cutoff_date_dt):
+            print(f"  [{i}/{len(articles)}] Skipping: {title} (Date {date_str} is out of range)")
+            if progress_path:
+                mark_url_complete(url, progress_path)
+            continue
+
+        print(f"  [{i}/{len(articles)}] Matching: {title} ({date_str or 'unknown date'})...")
 
         matches = match_article_to_findings(
-            client, article, unfollowed_findings, event_description, min_relevance
+            client, article, unfollowed_findings, event_description, cutoff_str, min_relevance
         )
 
         if matches:
@@ -796,6 +1021,10 @@ def main():
         print(f"Error: Context file not found: {context_path}")
         sys.exit(1)
 
+    # Calculate cutoff date for strict filtering
+    cutoff_date = datetime.now() - timedelta(days=args.days)
+    print(f"Timeframe: last {args.days} days (since {cutoff_date.strftime('%Y-%m-%d')})")
+
     # Load data
     print("Loading inputs...")
     findings = load_jsonl(findings_path)
@@ -883,6 +1112,7 @@ def main():
         articles,
         unfollowed,
         args.event,
+        cutoff_date_dt=cutoff_date,
         min_relevance=args.min_relevance,
         output_path=output_path,
         progress_path=progress_path,
