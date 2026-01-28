@@ -83,6 +83,10 @@ PDF → decompose to recommendations → generate context/summary of pdf → ver
 
 5. **Visualize** (`05_visualize.py`) — Produces a standalone HTML file. No server needed.
 
+6. **Consequences** (`06_consequences.py`) — Monitors news for real-world impact. It searches for recent news articles related to specific events (e.g., "Texas winter storm 2024") and matches them against unfollowed recommendations to see if the failure to act caused specific problems.
+
+7. **Visualize Consequences** (`07_visualize.py`) — Generates a specialized HTML report linking news articles to specific failed recommendations.
+
 ---
 
 ## Installation
@@ -93,7 +97,7 @@ Requires Python 3.8+ and API keys for OpenAI (extraction/enrichment) and Browser
 pip install -r requirements.txt
 ```
 
-Dependencies: `openai`, `pdfplumber`, `requests`, `pydantic`, `tqdm`
+Dependencies: `openai`, `pdfplumber`, `requests`, `pydantic`, `tqdm`, `nodriver`, `trafilatura`, `yt-dlp`, `webvtt-py`
 
 Set your API keys:
 
@@ -162,6 +166,26 @@ python 05_visualize.py "report.enriched.jsonl" --context "report_context.json"
 ```
 
 Outputs an HTML report.
+
+### 6. Find Consequences
+
+```bash
+python 06_consequences.py --findings "report.enriched.jsonl" --context "report_context.json" --event "texas winter storm january 2025"
+```
+
+Outputs a `.consequences.jsonl` file containing matches between unfollowed recommendations and real-world news.
+
+- `--days 14` — Look back 14 days for news (strict filtering).
+- `--headless` — Run browser in background.
+- `--resume` — Skip already-processed URLs.
+
+### 7. Visualize Consequences
+
+```bash
+python 07_visualize.py "report.consequences.jsonl"
+```
+
+Outputs an interactive HTML report (`.consequences.html`) linking news stories to specific regulatory failures. Uses `07_template.html`.
 
 ---
 
