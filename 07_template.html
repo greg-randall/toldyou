@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Consequences Report</title>
+
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+
+    <style>
+        body { background-color: #f8f9fa; }
+        [v-cloak] { display: none; }
+
+        .event-header {
+            background: linear-gradient(135deg, #721c24 0%, #c0392b 100%);
+        }
+
+        .consequence-card {
+            transition: transform 0.2s;
+            border: none;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .consequence-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+
+        .relevance-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: #fff;
+            flex-shrink: 0;
+        }
+        .relevance-high { background-color: #dc3545; }
+        .relevance-medium { background-color: #fd7e14; }
+        .relevance-low { background-color: #6c757d; }
+
+        .excerpt-box {
+            border-left: 4px solid #dc3545;
+            background-color: #fff5f5;
+            padding: 0.75rem 1rem;
+            font-style: italic;
+        }
+
+        .finding-link {
+            text-decoration: none;
+            color: inherit;
+        }
+        .finding-link:hover {
+            text-decoration: underline;
+        }
+
+        .article-source {
+            font-size: 0.85em;
+            color: #6c757d;
+        }
+
+        .stat-card {
+            border-radius: 8px;
+        }
+        .stat-number {
+            font-size: 1.8rem;
+            font-weight: 600;
+        }
+
+        .finding-group-header {
+            background-color: #e9ecef;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        .finding-group-header:hover {
+            background-color: #dee2e6;
+        }
+
+        .status-badge-not { background-color: #dc3545; color: #fff; }
+        .status-badge-partial { background-color: #ffc107; color: #212529; }
+    </style>
+</head>
+<body>
+
+<div id="app" v-cloak>
+    <!-- Event Header -->
+    <div class="event-header text-white py-4 mb-4">
+        <div class="container">
+            <h1 class="h3 mb-2">
+                <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                Consequences Report
+            </h1>
+            <p class="lead mb-3">{{ summary.event_query }}</p>
+
+            <!-- Stats Row -->
+            <div class="row g-3">
+                <div class="col-md-3 col-6">
+                    <div class="stat-card bg-white bg-opacity-25 p-3 text-center">
+                        <div class="stat-number">{{ summary.articles_fetched }}</div>
+                        <div class="small">Articles Analyzed</div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="stat-card bg-white bg-opacity-25 p-3 text-center">
+                        <div class="stat-number">{{ summary.total_matches }}</div>
+                        <div class="small">Evidence Found</div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="stat-card bg-white bg-opacity-25 p-3 text-center">
+                        <div class="stat-number">{{ summary.findings_with_evidence }}</div>
+                        <div class="small">Findings Linked</div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="stat-card bg-white bg-opacity-25 p-3 text-center">
+                        <div class="stat-number">{{ avgRelevance }}</div>
+                        <div class="small">Avg Relevance</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container pb-5">
+        <!-- Controls -->
+        <div class="row mb-4 g-3">
+            <div class="col-lg-4">
+                <div class="input-group">
+                    <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+                    <input v-model="searchQuery" type="text" class="form-control" placeholder="Search findings, articles...">
+                </div>
+            </div>
+            <div class="col-lg-2">
+                <select v-model="sortBy" class="form-select">
+                    <option value="relevance">By Relevance</option>
+                    <option value="articles">By Article Count</option>
+                    <option value="finding">By Finding</option>
+                </select>
+            </div>
+            <div class="col-lg-2">
+                <select v-model="filterStatus" class="form-select">
+                    <option value="ALL">All Statuses</option>
+                    <option value="NOT_IMPLEMENTED">Not Implemented</option>
+                    <option value="PARTIALLY_IMPLEMENTED">Partial</option>
+                </select>
+            </div>
+            <div class="col-lg-2">
+                <div class="d-flex align-items-center gap-2 h-100">
+                    <label class="form-label mb-0 small text-nowrap">Min Score</label>
+                    <input type="range" class="form-range flex-grow-1" v-model.number="minRelevance" min="1" max="10" step="1">
+                    <span class="badge bg-primary rounded-pill">{{ minRelevance }}</span>
+                </div>
+            </div>
+            <div class="col-lg-2">
+                <div class="form-check form-switch mt-2">
+                    <input class="form-check-input" type="checkbox" v-model="groupByFinding" id="groupCheck">
+                    <label class="form-check-label" for="groupCheck">Group by Finding</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Count -->
+        <p class="text-muted mb-3">
+            Showing {{ filteredItems.length }} of {{ items.length }} matches
+        </p>
+
+        <!-- Grouped View -->
+        <template v-if="groupByFinding">
+            <div v-for="group in groupedItems" :key="group.finding_id" class="mb-4">
+                <!-- Group Header -->
+                <div class="finding-group-header p-3 mb-2 d-flex align-items-center justify-content-between"
+                     @click="toggleGroup(group.finding_id)">
+                    <div class="d-flex align-items-center gap-3">
+                        <span class="badge rounded-pill"
+                              :class="group.status === 'NOT_IMPLEMENTED' ? 'status-badge-not' : 'status-badge-partial'">
+                            {{ group.status.replace(/_/g, ' ') }}
+                        </span>
+                        <div>
+                            <strong>{{ group.headline || group.action }}</strong>
+                            <div class="small text-muted">{{ group.actor }}</div>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-danger rounded-pill">{{ group.articles.length }} articles</span>
+                        <i class="bi" :class="expandedGroups.has(group.finding_id) ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+                    </div>
+                </div>
+
+                <!-- Group Articles -->
+                <div v-show="expandedGroups.has(group.finding_id)" class="ps-4">
+                    <div v-for="item in group.articles" :key="item.article.url" class="card consequence-card mb-2">
+                        <div class="card-body">
+                            <div class="d-flex gap-3">
+                                <span class="relevance-badge" :class="getRelevanceClass(item.match.relevance_score)">
+                                    {{ item.match.relevance_score }}
+                                </span>
+                                <div class="flex-grow-1">
+                                    <a :href="item.article.url" target="_blank" class="fw-bold text-decoration-none">
+                                        {{ item.article.title || 'Untitled' }}
+                                    </a>
+                                    <div class="article-source">
+                                        {{ item.article.source }}
+                                        <span v-if="item.article.date">| {{ item.article.date }}</span>
+                                    </div>
+                                    <div class="excerpt-box mt-2" v-if="item.match.excerpt">
+                                        "{{ item.match.excerpt }}"
+                                    </div>
+                                    <p class="mt-2 mb-0 small text-muted">{{ item.match.reasoning }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- Flat View -->
+        <template v-else>
+            <div v-for="item in filteredItems" :key="item.article.url + '-' + item.finding_id" class="card consequence-card mb-3">
+                <div class="card-body">
+                    <div class="d-flex gap-3">
+                        <span class="relevance-badge" :class="getRelevanceClass(item.match.relevance_score)">
+                            {{ item.match.relevance_score }}
+                        </span>
+                        <div class="flex-grow-1">
+                            <!-- Article Info -->
+                            <a :href="item.article.url" target="_blank" class="fw-bold text-decoration-none fs-5">
+                                {{ item.article.title || 'Untitled' }}
+                            </a>
+                            <div class="article-source mb-2">
+                                {{ item.article.source }}
+                                <span v-if="item.article.date">| {{ item.article.date }}</span>
+                            </div>
+
+                            <!-- Linked Finding -->
+                            <div class="bg-light rounded p-2 mb-2">
+                                <span class="badge rounded-pill me-2"
+                                      :class="item.finding_summary.status === 'NOT_IMPLEMENTED' ? 'status-badge-not' : 'status-badge-partial'">
+                                    {{ item.finding_summary.status.replace(/_/g, ' ') }}
+                                </span>
+                                <strong>{{ item.finding_summary.headline || item.finding_summary.action }}</strong>
+                                <div class="small text-muted">{{ item.finding_summary.actor }}</div>
+                            </div>
+
+                            <!-- Excerpt -->
+                            <div class="excerpt-box" v-if="item.match.excerpt">
+                                "{{ item.match.excerpt }}"
+                            </div>
+
+                            <!-- Reasoning -->
+                            <p class="mt-2 mb-0 text-muted">{{ item.match.reasoning }}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- Empty State -->
+        <div v-if="filteredItems.length === 0" class="text-center py-5 text-muted">
+            <i class="bi bi-inbox display-4"></i>
+            <p class="mt-3">No consequences match your filters.</p>
+        </div>
+    </div>
+</div>
+
+<!-- DATA INJECTION POINT -->
+<script>
+    window.CONSEQUENCES_DATA = {{CONSEQUENCES_DATA_PLACEHOLDER}};
+    window.CONSEQUENCES_SUMMARY = {{CONSEQUENCES_SUMMARY_PLACEHOLDER}};
+</script>
+
+<!-- Vue 3 -->
+<script src="https://cdn.jsdelivr.net/npm/vue@3.3.4/dist/vue.global.prod.js"></script>
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    const { createApp, computed, ref, reactive } = Vue;
+
+    createApp({
+        setup() {
+            const items = ref(window.CONSEQUENCES_DATA || []);
+            const summary = ref(window.CONSEQUENCES_SUMMARY || {
+                event_query: 'Unknown Event',
+                articles_fetched: 0,
+                total_matches: 0,
+                findings_with_evidence: 0,
+            });
+
+            const searchQuery = ref('');
+            const sortBy = ref('relevance');
+            const filterStatus = ref('ALL');
+            const minRelevance = ref(1);
+            const groupByFinding = ref(true);
+            const expandedGroups = reactive(new Set());
+
+            // Average relevance
+            const avgRelevance = computed(() => {
+                if (items.value.length === 0) return '0.0';
+                const sum = items.value.reduce((acc, i) => acc + (i.match?.relevance_score || 0), 0);
+                return (sum / items.value.length).toFixed(1);
+            });
+
+            // Filtered items
+            const filteredItems = computed(() => {
+                let result = items.value.filter(item => {
+                    // Status filter
+                    if (filterStatus.value !== 'ALL') {
+                        if (item.finding_summary?.status !== filterStatus.value) return false;
+                    }
+
+                    // Relevance filter
+                    if ((item.match?.relevance_score || 0) < minRelevance.value) return false;
+
+                    // Search filter
+                    if (searchQuery.value) {
+                        const q = searchQuery.value.toLowerCase();
+                        const text = [
+                            item.finding_summary?.headline,
+                            item.finding_summary?.action,
+                            item.finding_summary?.actor,
+                            item.article?.title,
+                            item.match?.reasoning,
+                            item.match?.excerpt,
+                        ].filter(Boolean).join(' ').toLowerCase();
+                        if (!text.includes(q)) return false;
+                    }
+
+                    return true;
+                });
+
+                // Sort
+                result = [...result].sort((a, b) => {
+                    switch (sortBy.value) {
+                        case 'relevance':
+                            return (b.match?.relevance_score || 0) - (a.match?.relevance_score || 0);
+                        case 'articles':
+                            // For flat view, just sort by relevance
+                            return (b.match?.relevance_score || 0) - (a.match?.relevance_score || 0);
+                        case 'finding':
+                            return (a.finding_summary?.actor || '').localeCompare(b.finding_summary?.actor || '');
+                        default:
+                            return 0;
+                    }
+                });
+
+                return result;
+            });
+
+            // Grouped by finding
+            const groupedItems = computed(() => {
+                const groups = {};
+
+                for (const item of filteredItems.value) {
+                    const fid = item.finding_id || 'unknown';
+                    if (!groups[fid]) {
+                        groups[fid] = {
+                            finding_id: fid,
+                            headline: item.finding_summary?.headline || '',
+                            action: item.finding_summary?.action || '',
+                            actor: item.finding_summary?.actor || '',
+                            status: item.finding_summary?.status || '',
+                            articles: [],
+                        };
+                    }
+                    groups[fid].articles.push(item);
+                }
+
+                // Sort groups by article count or max relevance
+                let groupList = Object.values(groups);
+
+                if (sortBy.value === 'articles') {
+                    groupList.sort((a, b) => b.articles.length - a.articles.length);
+                } else if (sortBy.value === 'relevance') {
+                    groupList.sort((a, b) => {
+                        const maxA = Math.max(...a.articles.map(x => x.match?.relevance_score || 0));
+                        const maxB = Math.max(...b.articles.map(x => x.match?.relevance_score || 0));
+                        return maxB - maxA;
+                    });
+                }
+
+                // Sort articles within each group
+                for (const g of groupList) {
+                    g.articles.sort((a, b) => (b.match?.relevance_score || 0) - (a.match?.relevance_score || 0));
+                }
+
+                return groupList;
+            });
+
+            const toggleGroup = (findingId) => {
+                if (expandedGroups.has(findingId)) {
+                    expandedGroups.delete(findingId);
+                } else {
+                    expandedGroups.add(findingId);
+                }
+            };
+
+            // Expand first 3 groups by default
+            if (items.value.length > 0) {
+                const fids = [...new Set(items.value.map(i => i.finding_id))].slice(0, 3);
+                fids.forEach(fid => expandedGroups.add(fid));
+            }
+
+            const getRelevanceClass = (score) => {
+                if (score >= 7) return 'relevance-high';
+                if (score >= 4) return 'relevance-medium';
+                return 'relevance-low';
+            };
+
+            return {
+                items,
+                summary,
+                searchQuery,
+                sortBy,
+                filterStatus,
+                minRelevance,
+                groupByFinding,
+                expandedGroups,
+                avgRelevance,
+                filteredItems,
+                groupedItems,
+                toggleGroup,
+                getRelevanceClass,
+            };
+        }
+    }).mount('#app');
+</script>
+
+</body>
+</html>
