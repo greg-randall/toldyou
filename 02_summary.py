@@ -1,20 +1,31 @@
-import argparse
 import json
-import sys
+import logging
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 try:
     import pdfplumber
     from openai import OpenAI
-except ImportError as e:
-    print(f"Error: Missing dependency. {e}")
-    print("Please run: pip install pdfplumber openai")
+except ImportError:
+    print("Error: Missing dependency. Please run: pip install -r requirements.txt")
     sys.exit(1)
 
-client = OpenAI()
+# Import pipeline utilities
+from pipeline_utils import ProjectContext, setup_common_args
 
-SYSTEM_PROMPT = """You are analyzing a regulatory/investigation report. Extract structured metadata from the opening pages.
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("summary")
+
+# --- Configuration ---
+MODEL = "gpt-4o"
+MAX_TOKENS = 2000
+
+SYSTEM_PROMPT = """You are an expert document analyst creating a context file for an autonomous verification agent.
+
+YOUR TASK:
+Analyze the provided introductory text of a regulatory report (title page, executive summary, acronyms list) and extract key metadata that will help a downstream agent verify the report's recommendations.
 
 OUTPUT SCHEMA (JSON):
 {
@@ -22,9 +33,9 @@ OUTPUT SCHEMA (JSON):
   "authors": ["Authoring organizations"],
   "publication_date": "YYYY-MM-DD or YYYY-MM if day unknown",
   "event_investigated": {
-    "name": "Common name for the event (e.g., 'February 2021 Texas Winter Storm')",
-    "date_range": "YYYY-MM-DD to YYYY-MM-DD",
-    "geographic_scope": "Affected regions/states"
+    "name": "Name of the specific event (e.g. 'February 2021 Texas Winter Storm')",
+    "date_range": "Dates of the event",
+    "geographic_scope": "Region affected (e.g. 'ERCOT, SPP, MISO')"
   },
   "regulatory_bodies": {
     "primary": ["Bodies that authored or commissioned the report"],
@@ -32,62 +43,47 @@ OUTPUT SCHEMA (JSON):
   },
   "summary": "2-3 sentence summary of what happened and what the report recommends",
   "key_terms": {
-    "ACRONYM": "Definition"
+    "ACRONYM": "Definition (extract important ones like GO, GOP, RC, BA, TOP)"
   }
 }
 
-RULES:
-1. Extract only what is explicitly stated. Do not infer or fabricate.
-2. For key_terms, include acronyms and domain-specific terms that appear frequently 
-   (e.g., "GOs" = "Generator Owners", "BA" = "Balancing Authority", "BES" = "Bulk Electric System")
-3. If a field cannot be determined from the text, use null.
-4. For date_range, use the actual event dates, not the report publication date.
-5. geographic_scope should list specific regions, states, or grid operators affected.
-6. In the summary, briefly describe: (a) what happened, (b) the main causes identified, 
-   (c) the thrust of the recommendations."""
-
-
-def extract_pages(pdf_path: Path, num_pages: int = 25) -> str:
-    """
-    Extract text from the first N pages of a PDF.
-    Returns concatenated text with page markers.
-    """
-    pages_text = []
-    print(f"Extracting first {num_pages} pages from {pdf_path}...")
-    
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            total_pages = len(pdf.pages)
-            pages_to_extract = min(num_pages, total_pages)
-            
-            for i in range(pages_to_extract):
-                page = pdf.pages[i]
-                text = page.extract_text() or ""
-                formatted_text = f"\n--- PAGE {i + 1} ---\n{text}"
-                pages_text.append(formatted_text)
-                
-    except Exception as e:
-        print(f"Error reading PDF: {e}")
-        sys.exit(1)
-    
-    return "\n".join(pages_text)
-
-
-def generate_summary(text: str, model: str = "gpt-4o") -> Optional[dict]:
-    """
-    Send extracted text to LLM and get structured document context.
-    """
-    print(f"Generating document summary with {model}...")
-    
-    user_prompt = f"""Analyze the following pages from a report and extract the document metadata.
-
---- TEXT (Opening Pages) ---
-{text}
+IMPORTANT:
+- The "key_terms" section is CRITICAL. The downstream agent needs to know that "GO" means "Generator Owner" to search effectively. Extract as many relevant domain-specific acronyms as found in the text.
+- If the document is a "Joint Inquiry" or "Task Force" report, note all participating agencies in "authors".
 """
 
+def extract_intro_text(pdf_path: Path, max_pages: int = 25) -> str:
+    """Extracts text from the first N pages of the PDF."""
+    logger.info(f"Extracting intro text from first {max_pages} pages of {pdf_path}...")
+    full_text = []
     try:
+        with pdfplumber.open(pdf_path) as pdf:
+            limit = min(len(pdf.pages), max_pages)
+            for i in range(limit):
+                text = pdf.pages[i].extract_text()
+                if text:
+                    full_text.append(f"--- PAGE {i+1} ---\n{text}")
+    except Exception as e:
+        logger.error(f"Error reading PDF: {e}")
+        return ""
+    
+    return "\n".join(full_text)
+
+def generate_context(text: str, filename: str) -> Dict[str, Any]:
+    """Generates the context JSON using OpenAI."""
+    # ... (Keep existing prompt logic) ...
+    user_prompt = f"""
+DOCUMENT FILENAME: {filename}
+
+--- BEGIN DOCUMENT TEXT (First {len(text)} chars) ---
+{text[:50000]} 
+--- END DOCUMENT TEXT ---
+"""
+    # ... (Rest of logic) ...
+    try:
+        client = OpenAI()
         response = client.chat.completions.create(
-            model=model,
+            model=MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt}
@@ -95,94 +91,54 @@ def generate_summary(text: str, model: str = "gpt-4o") -> Optional[dict]:
             temperature=0.0,
             response_format={"type": "json_object"}
         )
-        
         content = response.choices[0].message.content
-        if not content:
-            print("Error: Empty response from API")
-            return None
-            
         return json.loads(content)
-        
     except Exception as e:
-        print(f"Error calling API: {e}")
-        return None
-
+        logger.error(f"Error generating context: {e}")
+        return {}
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Extract document context/metadata from a regulatory report PDF."
-    )
-    parser.add_argument("input_file", help="Path to PDF")
-    parser.add_argument(
-        "--pages", 
-        type=int, 
-        default=25, 
-        help="Number of pages to extract (default: 25)"
-    )
-    parser.add_argument(
-        "--model",
-        default="gpt-4o",
-        help="Model to use (default: gpt-4o)"
-    )
-    parser.add_argument(
-        "--output",
-        help="Output file path (default: <input>_context.json)"
-    )
+    parser = setup_common_args("Generate document context/metadata.")
+    parser.add_argument("--pages", type=int, default=25, help="Number of pages to scan (default 25)")
     args = parser.parse_args()
 
-    input_path = Path(args.input_file)
-    if not input_path.exists():
-        print(f"Error: File {input_path} not found.")
-        sys.exit(1)
-    
-    # Default output path
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        output_path = input_path.with_name(f"{input_path.stem}_context.json")
+    ctx = ProjectContext(args.input)
+    logger.info(f"Project: {ctx.project_name}")
 
-    print(f"--- Extracting context from {input_path.name} ---")
-    
-    # 1. Extract text
-    text = extract_pages(input_path, num_pages=args.pages)
-    if not text.strip():
-        print("No text extracted. Exiting.")
+    input_pdf = ctx.paths["source"]
+    output_path = ctx.paths["context"]
+
+    if not input_pdf or not input_pdf.exists():
+        logger.error(f"Input PDF not found: {input_pdf}")
+        return
+
+    # 1. Extract Text
+    text = extract_intro_text(input_pdf, max_pages=args.pages)
+    if not text:
+        logger.error("No text extracted. Exiting.")
         sys.exit(1)
+
+    # 2. Generate Context
+    logger.info("Generating context with LLM...")
+    context_data = generate_context(text, input_pdf.name)
     
-    # 2. Generate summary
-    context = generate_summary(text, model=args.model)
-    if not context:
-        print("Failed to generate context. Exiting.")
+    if not context_data:
+        logger.error("Failed to generate context.")
         sys.exit(1)
-    
-    # 3. Add source metadata
-    output = {
-        "source_file": str(args.input_file),
-        "pages_analyzed": args.pages,
-        "document_context": context
+
+    # 3. Save
+    wrapper = {
+        "source_file": str(input_pdf),
+        "document_context": context_data
     }
     
-    # 4. Save
     try:
         with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(output, f, indent=2)
-        print(f"Success! Saved document context to {output_path}")
+            json.dump(wrapper, f, indent=2)
+        logger.info(f"Context saved to {output_path}")
     except Exception as e:
-        print(f"Error saving output: {e}")
-        sys.exit(1)
-    
-    # 5. Print summary to console
-    print("\n--- Document Summary ---")
-    print(f"Title: {context.get('title', 'Unknown')}")
-    print(f"Authors: {', '.join(context.get('authors', []))}")
-    print(f"Date: {context.get('publication_date', 'Unknown')}")
-    if context.get('event_investigated'):
-        event = context['event_investigated']
-        print(f"Event: {event.get('name', 'Unknown')}")
-        print(f"  Date Range: {event.get('date_range', 'Unknown')}")
-        print(f"  Scope: {event.get('geographic_scope', 'Unknown')}")
-    print(f"\nSummary: {context.get('summary', 'N/A')}")
-
+        logger.error(f"Error saving output: {e}")
 
 if __name__ == "__main__":
     main()
+

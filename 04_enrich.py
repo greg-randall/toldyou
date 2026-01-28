@@ -14,17 +14,31 @@ Usage:
 """
 
 import argparse
+import asyncio
 import json
+import logging
 import os
 import sys
+import time
 from pathlib import Path
+from typing import Optional
 
 from openai import OpenAI
+from pydantic import BaseModel, Field
+from tqdm import tqdm
+
+# Import pipeline utilities
+from pipeline_utils import ProjectContext, setup_common_args
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("enrich")
 
 # --- Configuration ---
+MODEL = "gpt-4o-mini"  # Faster/cheaper for enrichment
+MAX_RETRIES = 3
 
-MODEL = "gpt-4o-mini"
-
+# ... (Keep scores and schema logic) ...
 IMPLEMENTATION_GAP_SCORES = {
     "IMPLEMENTED": 1,
     "PARTIALLY_IMPLEMENTED": 5,
@@ -117,7 +131,6 @@ CLASSIFY_TOOL = {
         },
     },
 }
-
 
 # --- I/O ---
 
@@ -298,56 +311,52 @@ def enrich_record(client: OpenAI, record: dict) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Enrich verified findings with LLM summaries and priority scores."
-    )
-    parser.add_argument("input_file", help="Path to verified JSONL from verify.py")
-    parser.add_argument("--output", help="Output enriched JSONL (default: <input>.enriched.jsonl)")
-    parser.add_argument("--debug", action="store_true", help="Process only first 3 findings")
+    parser = setup_common_args("Enrich verified findings with LLM summaries and priority scores.")
     parser.add_argument("--resume", action="store_true", help="Resume previous run, skip already-enriched findings")
+    parser.add_argument("--limit", type=int, help="Limit number of findings to process")
+    parser.add_argument("--debug", action="store_true", help="Process only first 3 findings")
     args = parser.parse_args()
 
-    input_path = Path(args.input_file)
-    if not input_path.exists():
-        print(f"Error: Input file not found: {input_path}")
-        sys.exit(1)
+    ctx = ProjectContext(args.input)
+    logger.info(f"Project: {ctx.project_name}")
 
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        # foo.verified.jsonl -> foo.enriched.jsonl
-        stem = input_path.name
-        if stem.endswith(".verified.jsonl"):
-            new_name = stem.replace(".verified.jsonl", ".enriched.jsonl")
-        elif stem.endswith(".jsonl"):
-            new_name = stem.replace(".jsonl", ".enriched.jsonl")
-        else:
-            new_name = stem + ".enriched.jsonl"
-        output_path = input_path.parent / new_name
+    input_path = ctx.paths["verified"]
+    output_path = ctx.paths["enriched"]
+
+    if not input_path.exists():
+        logger.error(f"Verified findings not found: {input_path}")
+        logger.info("Did you run 03_verify.py?")
+        sys.exit(1)
 
     # Load data
     records = load_jsonl(input_path)
-    print(f"Loaded {len(records)} findings from {input_path.name}")
+    logger.info(f"Loaded {len(records)} findings")
 
     if args.debug:
         records = records[:3]
-        print(f"DEBUG MODE: Processing only {len(records)} findings")
+        logger.info(f"DEBUG MODE: Processing only {len(records)} findings")
+    elif args.limit:
+        records = records[:args.limit]
+        logger.info(f"Limited to {len(records)} findings")
 
     if not records:
-        print("No findings to enrich.")
+        logger.info("No findings to enrich.")
         sys.exit(0)
 
     # Progress tracking
     progress_path = output_path.with_suffix(".progress")
 
+    completed_ids = set()
     if args.resume:
         completed_ids = load_completed_ids(progress_path)
         if completed_ids:
-            print(f"Resuming: {len(completed_ids)} already enriched")
+            logger.info(f"Resuming: {len(completed_ids)} already enriched")
     else:
-        completed_ids = set()
-        output_path.write_text("", encoding="utf-8")
-        progress_path.write_text("", encoding="utf-8")
+        # Clear previous
+        if output_path.exists():
+            output_path.write_text("", encoding="utf-8")
+        if progress_path.exists():
+            progress_path.write_text("", encoding="utf-8")
 
     client = OpenAI()
 
@@ -365,7 +374,6 @@ def main():
             skipped += 1
             continue
 
-        # Skip records that had errors during verification
         if not record.get("verification"):
             print(f"  Skipping (no verification data)")
             enriched = dict(record)
@@ -387,35 +395,12 @@ def main():
         except Exception as e:
             print(f"  Error: {e}")
             errors += 1
-            # Write record without enrichment (do NOT mark complete so it retries)
             fallback = dict(record)
             fallback["enrichment"] = None
             append_jsonl(fallback, output_path)
 
-    # Summary
-    print(f"\n{'='*60}")
-    print("ENRICHMENT SUMMARY")
-    print(f"{'='*60}")
-    print(f"  Enriched: {success}/{len(records)}")
-    if skipped:
-        print(f"  Skipped:  {skipped} (already enriched)")
-    if errors:
-        print(f"  Errors:   {errors}")
-    print(f"  Output:   {output_path}")
-
-    # Score distribution
-    enriched_records = load_jsonl(output_path)
-    scores = [
-        r["enrichment"]["scores"]["composite"]
-        for r in enriched_records
-        if r.get("enrichment") and r["enrichment"].get("scores")
-    ]
-    if scores:
-        print(f"\n  Composite scores:")
-        print(f"    Min:  {min(scores)}")
-        print(f"    Max:  {max(scores)}")
-        print(f"    Mean: {sum(scores)/len(scores):.1f}")
-
+    logger.info(f"Enrichment complete. Saved to {output_path}")
 
 if __name__ == "__main__":
     main()
+

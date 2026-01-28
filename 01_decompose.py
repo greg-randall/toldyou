@@ -1,10 +1,9 @@
-import argparse
 import json
-import os
+import logging
 import re
 import sys
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 try:
     import pdfplumber
@@ -15,14 +14,17 @@ except ImportError as e:
     print("Please run: pip install -r requirements.txt")
     sys.exit(1)
 
+# Import the new pipeline utilities
+from pipeline_utils import ProjectContext, setup_common_args
+
+# Configure logging
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logger = logging.getLogger("decompose")
+
 # Initialize OpenAI Client
-# Expects OPENAI_API_KEY environment variable to be set
 try:
     client = OpenAI()
-except Exception as e:
-    # We'll handle this gracefully if the call fails later, 
-    # but initializing the client without a key might warn or fail depending on version.
-    # Usually it's fine until a request is made if the env var is missing.
+except Exception:
     pass
 
 def extract_pages(pdf_path: Path, limit: int = None) -> List[str]:
@@ -30,7 +32,7 @@ def extract_pages(pdf_path: Path, limit: int = None) -> List[str]:
     Opens PDF and returns list of strings with page markers.
     """
     pages_text = []
-    print(f"Extracting text from {pdf_path}...")
+    logger.info(f"Extracting text from {pdf_path}...")
     try:
         with pdfplumber.open(pdf_path) as pdf:
             # Determine how many pages to process
@@ -48,7 +50,7 @@ def extract_pages(pdf_path: Path, limit: int = None) -> List[str]:
                 pages_text.append(formatted_text)
                 
     except Exception as e:
-        print(f"Error reading PDF: {e}")
+        logger.error(f"Error reading PDF: {e}")
         sys.exit(1)
         
     return pages_text
@@ -87,14 +89,6 @@ def create_chunks(pages: List[str]) -> List[Dict[str, Any]]:
             "text": chunk_text,
             "page_range": f"{start_page}-{end_page}"
         })
-        
-    # Handle any remaining pages if the stride/window logic missed the tail?
-    # With stride 1 and loop range `len(pages) - window_size + 1`, we stop when the window hits the end.
-    # Example: 5 pages, window 3.
-    # i=0: [0,1,2] (Pages 1-3)
-    # i=1: [1,2,3] (Pages 2-4)
-    # i=2: [2,3,4] (Pages 3-5)
-    # i=3: Loop terminates (3 > 5-3). Correct.
     
     return chunks
 
@@ -236,7 +230,7 @@ ADDITIONAL RULES
                 f.write("\n\n--- USER PROMPT ---\n")
                 f.write(user_prompt)
         except Exception as e:
-            print(f"Warning: Could not save debug prompt: {e}")
+            logger.warning(f"Could not save debug prompt: {e}")
 
     try:
         response = client.chat.completions.create(
@@ -260,7 +254,7 @@ ADDITIONAL RULES
                 with open(response_file, "w", encoding="utf-8") as f:
                     f.write(content)
             except Exception as e:
-                print(f"Warning: Could not save debug response: {e}")
+                logger.warning(f"Could not save debug response: {e}")
 
         data = json.loads(content)
         findings = data.get("findings", [])
@@ -286,78 +280,80 @@ ADDITIONAL RULES
                 if match:
                     page_num = int(match.group())
                     if not (start_p <= page_num <= end_p):
-                        # Page is out of bounds for this chunk
-                        # print(f"Debug: Correcting page {page_num} to {safe_page} (Range: {page_range})")
                         f["citation_page"] = str(safe_page)
-                        f["original_citation_page"] = raw_page # Keep record just in case
+                        f["original_citation_page"] = raw_page
                 else:
                     # No number found, assign safe default
                     f["citation_page"] = str(safe_page)
                     
         except Exception as e:
-            print(f"Warning: Error validating page numbers: {e}")
+            logger.warning(f"Error validating page numbers: {e}")
             
         return findings
         
     except Exception as e:
-        print(f"\nError processing chunk {page_range}: {e}")
+        logger.error(f"Error processing chunk {page_range}: {e}")
         return []
 
 def main():
-    parser = argparse.ArgumentParser(description="Decompose regulatory PDF into requirements.")
-    parser.add_argument("input_file", help="Path to PDF")
+    parser = setup_common_args("Decompose regulatory PDF into requirements.")
     parser.add_argument("--test", type=int, help="Limit to N pages", default=None)
     parser.add_argument("--debug", action="store_true", help="Save extracted text pages to a debug folder")
     args = parser.parse_args()
 
-    input_path = Path(args.input_file)
-    if not input_path.exists():
-        print(f"Error: File {input_path} not found.")
-        sys.exit(1)
-        
-    output_path = input_path.with_suffix(".json")
+    # Initialize Project Context
+    ctx = ProjectContext(args.input)
+    logger.info(f"Project: {ctx.project_name}")
+    logger.info(f"Directory: {ctx.project_dir}")
 
-    print(f"--- Processing {input_path.name} ---")
+    input_pdf = ctx.paths["source"]
+    output_path = ctx.paths["findings"]
+    
+    if args.debug:
+        ctx.ensure_debug_dir()
+
+    if not input_pdf or not input_pdf.exists():
+        logger.error(f"Input PDF not found: {input_pdf}")
+        # Try to suggest copying/moving it
+        if args.input.endswith(".pdf") and Path(args.input).exists():
+             logger.info(f"Note: You might want to move '{args.input}' to '{ctx.project_dir}'")
+        return
+
+    logger.info(f"Processing {input_pdf.name}")
     
     # 1. Extract
-    pages = extract_pages(input_path, limit=args.test)
+    pages = extract_pages(input_pdf, limit=args.test)
     if not pages:
-        print("No text extracted. Exiting.")
+        logger.error("No text extracted. Exiting.")
         sys.exit(0)
         
-    debug_dir = None
-    if args.debug:
-        debug_dir = input_path.parent / input_path.stem
+    debug_dir = ctx.paths["debug_dir"] if args.debug else None
+    
+    if debug_dir:
         try:
-            debug_dir.mkdir(parents=True, exist_ok=True)
-            print(f"Debug mode enabled. Saving pages to directory: {debug_dir}")
+            logger.info(f"Debug mode enabled. Saving pages to directory: {debug_dir}")
             for i, page_text in enumerate(pages):
-                # page_text already includes "\n--- PAGE {n} ---\n" header
-                # We'll strip the leading newline for the file if desired, or keep exactly as exported.
-                # Keeping as exported is safer per instructions.
                 page_num = i + 1
                 page_file = debug_dir / f"page_{page_num:03d}.txt"
                 with open(page_file, "w", encoding="utf-8") as f:
                     f.write(page_text)
         except Exception as e:
-            print(f"Warning: Could not save debug files: {e}")
+            logger.warning(f"Could not save debug files: {e}")
         
     # 2. Chunk
     chunks = create_chunks(pages)
-    print(f"Created {len(chunks)} chunks from {len(pages)} pages.")
+    logger.info(f"Created {len(chunks)} chunks from {len(pages)} pages.")
     
     # 3. Analyze Loop
     all_data = []
     previous_buffer = [] # State variable
     
-    print("Analyzing chunks...")
+    logger.info("Analyzing chunks...")
     # Using tqdm for progress bar
     for chunk in tqdm(chunks):
         # Format the previous findings into a simple string for the prompt
         context_str = "NONE"
         if previous_buffer:
-            # We use a set to dedup lines just in case, though the logic is strictly sequential
-            # The prompt asks for "Actor: Action" to check for overlap
             formatted_findings = [f"- {f.get('actor', 'Unknown')}: {f.get('action', 'Unknown')}" for f in previous_buffer]
             context_str = "\n".join(formatted_findings)
         
@@ -373,11 +369,11 @@ def main():
     # 4. Save
     try:
         with open(output_path, "w") as f:
-            json.dump({"source": str(args.input_file), "findings": all_data}, f, indent=2)
+            json.dump({"source": str(input_pdf), "findings": all_data}, f, indent=2)
         
-        print(f"Success! Saved {len(all_data)} findings to {output_path}")
+        logger.info(f"Success! Saved {len(all_data)} findings to {output_path}")
     except Exception as e:
-        print(f"Error saving output: {e}")
+        logger.error(f"Error saving output: {e}")
 
 if __name__ == "__main__":
     main()

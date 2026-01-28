@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""Generate a visual HTML report from consequence findings."""
-
 import argparse
 import json
 import logging
@@ -8,12 +5,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Import pipeline utilities
+from pipeline_utils import ProjectContext, setup_common_args
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s: %(message)s"
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("visualize_consequences")
 
 
 def load_jsonl(file_path: Path) -> list[dict[str, Any]]:
@@ -75,31 +75,26 @@ def inject_data(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Generate a visual HTML report from consequence findings."
-    )
-    parser.add_argument("input_file", help="Path to consequences JSONL file")
-    parser.add_argument(
-        "--summary",
-        help="Path to summary JSON file (default: <input_filename>_summary.json)"
-    )
+    parser = setup_common_args("Generate a visual HTML report from consequence findings.")
     parser.add_argument(
         "--template",
         default="07_template.html",
         help="Path to HTML template (default: 07_template.html)"
     )
-    parser.add_argument(
-        "--output",
-        help="Output HTML file path (default: <input_filename>.html)"
-    )
     args = parser.parse_args()
 
-    input_path = Path(args.input_file)
-    output_path = Path(args.output) if args.output else input_path.with_suffix(".html")
+    # Initialize Project Context
+    ctx = ProjectContext(args.input)
+    logger.info(f"Project: {ctx.project_name}")
+
+    input_path = ctx.paths["consequences"]
+    summary_path = ctx.paths["consequences_summary"]
+    output_path = ctx.paths["consequences_html"]
 
     # Validate input file
     if not input_path.exists():
-        logger.error(f"Input file not found: {input_path}")
+        logger.error(f"Consequences file not found: {input_path}")
+        logger.info("Did you run 06_consequences.py?")
         return 1
 
     # Find template
@@ -119,7 +114,6 @@ def main() -> int:
     logger.info(f"Loaded {len(consequences)} consequence matches")
 
     # Load summary data
-    summary_path = Path(args.summary) if args.summary else input_path.with_name(input_path.stem + "_summary.json")
     if not summary_path.exists():
         logger.error(f"Summary file not found: {summary_path}")
         return 1
@@ -159,3 +153,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
