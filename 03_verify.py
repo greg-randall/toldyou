@@ -15,6 +15,7 @@ import asyncio
 import csv
 import hashlib
 import json
+import logging
 import os
 import re
 import sys
