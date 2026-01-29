@@ -81,6 +81,8 @@ PDF → Project Folder → Decompose → Summarize → Verify → Enrich → Vis
 6. **Consequences** (`06_consequences.py`) — Matches unfollowed findings to recent news events using parallel web discovery and video transcription.
 7. **Visualize Consequences** (`07_visualize.py`) — Generates an interactive report linking news to regulatory failures.
 
+For a detailed breakdown of the internal logic of each script, see [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md).
+
 ---
 
 ## Project Architecture (Refactored)
